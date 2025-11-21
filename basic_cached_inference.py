@@ -266,10 +266,10 @@ if __name__ == "__main__":
     print("BASIC CACHED INFERENCE TEST")
     print("="*60)
 
-    test_openai()
-    test_anthropic()
-    test_cerebras()
-    test_huggingface()
+    # test_openai()
+    # test_anthropic()
+    # test_cerebras()
+    # test_huggingface()
     test_google_genai()
 
 

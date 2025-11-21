@@ -314,14 +314,18 @@ class WeaveImportHook(MetaPathFinder):
         We don't actually find or load modules - we just detect when a supported
         integration is being imported and schedule it for patching after import.
         """
-        # Check if this is a root module we support (not a submodule)
-        root_module = fullname.split(".")[0]
+        # Check if this is a module we support
+        # First check if fullname matches exactly (e.g., "google.genai")
+        # Then fall back to checking root module (e.g., "openai")
+        module_to_check = fullname
+        if fullname not in INTEGRATION_MODULE_MAPPING:
+            module_to_check = fullname.split(".")[0]
 
         # If this is one of our supported integrations and not yet patched,
         # we'll patch it after it's imported
         if (
-            root_module in INTEGRATION_MODULE_MAPPING
-            and root_module not in _PATCHED_INTEGRATIONS
+            module_to_check in INTEGRATION_MODULE_MAPPING
+            and module_to_check not in _PATCHED_INTEGRATIONS
         ):
             # We don't actually find the spec - let the normal import system do that
             # But we'll use a Loader wrapper to patch after import
@@ -334,9 +338,9 @@ class WeaveImportHook(MetaPathFinder):
                     if spec is not None:
                         break
 
-            if spec is not None and fullname == root_module:
+            if spec is not None and fullname == module_to_check:
                 # Wrap the loader to patch after import
-                spec.loader = PatchingLoader(spec.loader, root_module)
+                spec.loader = PatchingLoader(spec.loader, module_to_check)
                 return spec
 
         # Not our concern, let other finders handle it

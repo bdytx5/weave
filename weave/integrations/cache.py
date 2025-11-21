@@ -182,6 +182,8 @@ class LLMCache:
         """
         import pickle
 
+        print(f"[CACHE SERIALIZE] Input type: {type(response)}")
+
         # Try dict conversion FIRST (safer, more compatible)
         # Try pydantic model_dump first
         if hasattr(response, 'model_dump'):
@@ -190,9 +192,11 @@ class LLMCache:
                 # Verify it's picklable
                 pickle.dumps(serialized)
                 logger.debug(f"Serialized response using model_dump()")
+                print(f"[CACHE SERIALIZE] Used model_dump(), result type: {type(serialized)}")
                 return serialized
             except Exception as e:
                 logger.debug(f"model_dump() failed: {e}")
+                print(f"[CACHE SERIALIZE] model_dump() failed: {e}")
 
         # Try pydantic dict() for older versions
         if hasattr(response, 'dict'):
@@ -200,22 +204,27 @@ class LLMCache:
                 serialized = response.dict()
                 pickle.dumps(serialized)
                 logger.debug(f"Serialized response using dict()")
+                print(f"[CACHE SERIALIZE] Used dict(), result type: {type(serialized)}")
                 return serialized
             except Exception as e:
                 logger.debug(f"dict() failed: {e}")
+                print(f"[CACHE SERIALIZE] dict() failed: {e}")
 
         # Fallback: Try to pickle as-is
         try:
             pickle.dumps(response)
             # If successful, return as-is (no conversion needed)
             logger.debug(f"Response pickled as-is without conversion")
+            print(f"[CACHE SERIALIZE] Pickled as-is")
             return response
         except (TypeError, AttributeError, pickle.PicklingError):
             # Can't pickle - already tried dict conversion above
             logger.debug(f"Response not directly picklable and dict conversion failed")
+            print(f"[CACHE SERIALIZE] Pickle failed")
 
         # Last resort: return as-is and let the cache.set() try-catch handle it
         logger.debug(f"Could not serialize response, returning as-is")
+        print(f"[CACHE SERIALIZE] Returning as-is")
         return response
 
     def _deserialize_response(self, cached_data: Any, response_type: type | None = None) -> Any:
@@ -229,6 +238,7 @@ class LLMCache:
         Returns:
             Deserialized response
         """
+        print(f"[CACHE DESERIALIZE] Input type: {type(cached_data)}")
         # For now, just return the dict - consumers can handle it
         # In the future, we could reconstruct the original type if needed
         return cached_data

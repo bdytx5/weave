@@ -16,6 +16,40 @@ SKIP_TRACING_FUNCTIONS = [
 ]
 
 
+def maybe_unwrap_google_genai_response(value: Any) -> Any:
+    """Unwrap Google GenAI response for caching."""
+    # Google GenAI responses are pydantic models, return as-is for serialization
+    print(f"[GOOGLE GENAI UNWRAP] Type: {type(value)}")
+    return value
+
+
+def maybe_wrap_google_genai_response(value: Any) -> Any:
+    """Reconstruct Google GenAI response objects from cached dicts."""
+    print(f"[GOOGLE GENAI WRAP] Input type: {type(value)}, is_dict: {isinstance(value, dict)}")
+    if not isinstance(value, dict):
+        print(f"[GOOGLE GENAI WRAP] Not a dict, returning as-is")
+        return value
+
+    try:
+        from google.genai.types import GenerateContentResponse
+
+        # Try to reconstruct GenerateContentResponse from dict
+        if "candidates" in value or "usage_metadata" in value:
+            try:
+                result = GenerateContentResponse(**value)
+                print(f"[GOOGLE GENAI WRAP] Successfully reconstructed to {type(result)}")
+                return result
+            except Exception as e:
+                print(f"[GOOGLE GENAI WRAP] Reconstruction failed: {e}")
+                pass
+    except Exception as e:
+        print(f"[GOOGLE GENAI WRAP] Import/check failed: {e}")
+        pass
+
+    print(f"[GOOGLE GENAI WRAP] Returning dict as-is")
+    return value
+
+
 def google_genai_gemini_postprocess_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
     """Postprocess inputs of the trace for the Google GenAI Gemini API to be used in
     the trace visualization in the Weave UI. If the parameter `self` is present
@@ -110,29 +144,18 @@ def google_genai_gemini_wrapper_sync(
 ) -> Callable[[Callable], Callable]:
     def wrapper(fn: Callable) -> Callable:
         from weave.integrations.cache import with_llm_cache
-        from google.genai.types import GenerateContentResponse
 
-        @with_llm_cache("google_genai")
+        @with_llm_cache("google_genai", unwrap_fn=maybe_unwrap_google_genai_response, wrap_fn=maybe_wrap_google_genai_response)
+        @wraps(fn)
         def _cached_fn(self, *args, **kwargs):
             result = fn(self, *args, **kwargs)
-            return result
-
-        @wraps(fn)
-        def _reconstruct_wrapper(self, *args, **kwargs):
-            result = _cached_fn(self, *args, **kwargs)
-            # If result is a dict (from cache), reconstruct the original type
-            if isinstance(result, dict):
-                try:
-                    result = GenerateContentResponse(**result)
-                except Exception:
-                    pass  # Return dict if reconstruction fails
             return result
 
         op_kwargs = settings.model_dump()
         if not op_kwargs.get("postprocess_inputs"):
             op_kwargs["postprocess_inputs"] = google_genai_gemini_postprocess_inputs
 
-        op = weave.op(_reconstruct_wrapper, **op_kwargs)
+        op = weave.op(_cached_fn, **op_kwargs)
         if op.name not in SKIP_TRACING_FUNCTIONS:
             op._set_on_finish_handler(google_genai_gemini_on_finish)
         return _add_accumulator(
@@ -149,32 +172,17 @@ def google_genai_gemini_wrapper_async(
 ) -> Callable[[Callable], Callable]:
     def wrapper(fn: Callable) -> Callable:
         from weave.integrations.cache import with_llm_cache
-        from google.genai.types import GenerateContentResponse
 
-        def _fn_wrapper(fn: Callable) -> Callable:
-            @wraps(fn)
-            @with_llm_cache("google_genai")
-            async def _async_cached_wrapper(self, *args: Any, **kwargs: Any) -> Any:
-                return await fn(self, *args, **kwargs)
-
-            @wraps(fn)
-            async def _async_reconstruct_wrapper(self, *args: Any, **kwargs: Any) -> Any:
-                result = await _async_cached_wrapper(self, *args, **kwargs)
-                # If result is a dict (from cache), reconstruct the original type
-                if isinstance(result, dict):
-                    try:
-                        result = GenerateContentResponse(**result)
-                    except Exception:
-                        pass  # Return dict if reconstruction fails
-                return result
-
-            return _async_reconstruct_wrapper
+        @wraps(fn)
+        @with_llm_cache("google_genai", unwrap_fn=maybe_unwrap_google_genai_response, wrap_fn=maybe_wrap_google_genai_response)
+        async def _async_cached_fn(self, *args: Any, **kwargs: Any) -> Any:
+            return await fn(self, *args, **kwargs)
 
         op_kwargs = settings.model_dump()
         if not op_kwargs.get("postprocess_inputs"):
             op_kwargs["postprocess_inputs"] = google_genai_gemini_postprocess_inputs
 
-        op = weave.op(_fn_wrapper(fn), **op_kwargs)
+        op = weave.op(_async_cached_fn, **op_kwargs)
         if op.name not in SKIP_TRACING_FUNCTIONS:
             op._set_on_finish_handler(google_genai_gemini_on_finish)
         return _add_accumulator(
