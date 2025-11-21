@@ -23,9 +23,11 @@ def google_genai_gemini_postprocess_inputs(inputs: dict[str, Any]) -> dict[str, 
     dictionary of attributes that can be displayed in the Weave UI.
     """
     # Extract the model name from the inputs and ensure it is present in the inputs
-    model_name = getattr(inputs["self"], "_model", None)
-    if model_name is not None:
-        inputs["model"] = model_name
+    # First check if model is already in inputs as a kwarg
+    if "model" not in inputs and "self" in inputs:
+        model_name = getattr(inputs["self"], "_model", None)
+        if model_name is not None:
+            inputs["model"] = model_name
 
     # Convert the `self` parameter which is actually the state of the
     # `google.genai.models.Models` object to a dictionary of attributes that can
@@ -41,8 +43,10 @@ def google_genai_gemini_on_finish(
     """On finish handler for the Google GenAI Gemini API integration that ensures the usage
     metadata is added to the summary of the trace.
     """
-    if not (model_name := call.inputs.get("model")):
-        raise ValueError("Unknown model type")
+    model_name = call.inputs.get("model")
+    if not model_name:
+        # Model might not be extracted, skip usage tracking
+        return
     usage = {model_name: {"requests": 1}}
     summary_update = {"usage": usage}
     if output:
@@ -105,11 +109,30 @@ def google_genai_gemini_wrapper_sync(
     settings: OpSettings,
 ) -> Callable[[Callable], Callable]:
     def wrapper(fn: Callable) -> Callable:
+        from weave.integrations.cache import with_llm_cache
+        from google.genai.types import GenerateContentResponse
+
+        @with_llm_cache("google_genai")
+        def _cached_fn(self, *args, **kwargs):
+            result = fn(self, *args, **kwargs)
+            return result
+
+        @wraps(fn)
+        def _reconstruct_wrapper(self, *args, **kwargs):
+            result = _cached_fn(self, *args, **kwargs)
+            # If result is a dict (from cache), reconstruct the original type
+            if isinstance(result, dict):
+                try:
+                    result = GenerateContentResponse(**result)
+                except Exception:
+                    pass  # Return dict if reconstruction fails
+            return result
+
         op_kwargs = settings.model_dump()
         if not op_kwargs.get("postprocess_inputs"):
             op_kwargs["postprocess_inputs"] = google_genai_gemini_postprocess_inputs
 
-        op = weave.op(fn, **op_kwargs)
+        op = weave.op(_reconstruct_wrapper, **op_kwargs)
         if op.name not in SKIP_TRACING_FUNCTIONS:
             op._set_on_finish_handler(google_genai_gemini_on_finish)
         return _add_accumulator(
@@ -125,12 +148,27 @@ def google_genai_gemini_wrapper_async(
     settings: OpSettings,
 ) -> Callable[[Callable], Callable]:
     def wrapper(fn: Callable) -> Callable:
+        from weave.integrations.cache import with_llm_cache
+        from google.genai.types import GenerateContentResponse
+
         def _fn_wrapper(fn: Callable) -> Callable:
             @wraps(fn)
-            async def _async_wrapper(*args: Any, **kwargs: Any) -> Any:
-                return await fn(*args, **kwargs)
+            @with_llm_cache("google_genai")
+            async def _async_cached_wrapper(self, *args: Any, **kwargs: Any) -> Any:
+                return await fn(self, *args, **kwargs)
 
-            return _async_wrapper
+            @wraps(fn)
+            async def _async_reconstruct_wrapper(self, *args: Any, **kwargs: Any) -> Any:
+                result = await _async_cached_wrapper(self, *args, **kwargs)
+                # If result is a dict (from cache), reconstruct the original type
+                if isinstance(result, dict):
+                    try:
+                        result = GenerateContentResponse(**result)
+                    except Exception:
+                        pass  # Return dict if reconstruction fails
+                return result
+
+            return _async_reconstruct_wrapper
 
         op_kwargs = settings.model_dump()
         if not op_kwargs.get("postprocess_inputs"):

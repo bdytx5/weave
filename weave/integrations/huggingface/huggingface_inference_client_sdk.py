@@ -17,6 +17,32 @@ if TYPE_CHECKING:
 _huggingface_patcher: Optional[MultiPatcher] = None
 
 
+def maybe_unwrap_huggingface_response(value: Any) -> Any:
+    """Unwrap HuggingFace response for caching."""
+    # HuggingFace responses are pydantic models, return as-is for serialization
+    return value
+
+
+def maybe_wrap_huggingface_response(value: Any) -> Any:
+    """Reconstruct HuggingFace response objects from cached dicts."""
+    if not isinstance(value, dict):
+        return value
+
+    try:
+        from huggingface_hub.inference._generated.types.chat_completion import ChatCompletionOutput
+
+        # Try to reconstruct ChatCompletionOutput from dict
+        if "choices" in value and "model" in value:
+            try:
+                return ChatCompletionOutput(**value)
+            except Exception:
+                pass
+    except:
+        pass
+
+    return value
+
+
 def huggingface_postprocess_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
     if "self" in inputs:
         inputs["self"] = dictify(inputs["self"])
@@ -74,11 +100,17 @@ def huggingface_accumulator(
 
 def huggingface_wrapper_sync(settings: OpSettings) -> Callable[[Callable], Callable]:
     def wrapper(fn: Callable) -> Callable:
+        from weave.integrations.cache import with_llm_cache
+
+        @with_llm_cache("huggingface", unwrap_fn=maybe_unwrap_huggingface_response, wrap_fn=maybe_wrap_huggingface_response)
+        def _cached_fn(self, *args, **kwargs):
+            return fn(self, *args, **kwargs)
+
         op_kwargs = settings.model_dump()
         if not op_kwargs.get("postprocess_inputs"):
             op_kwargs["postprocess_inputs"] = huggingface_postprocess_inputs
 
-        op = weave.op(fn, **op_kwargs)
+        op = weave.op(_cached_fn, **op_kwargs)
         return _add_accumulator(
             op,  # type: ignore
             make_accumulator=lambda inputs: huggingface_accumulator,
@@ -91,10 +123,13 @@ def huggingface_wrapper_sync(settings: OpSettings) -> Callable[[Callable], Calla
 
 def huggingface_wrapper_async(settings: OpSettings) -> Callable[[Callable], Callable]:
     def wrapper(fn: Callable) -> Callable:
+        from weave.integrations.cache import with_llm_cache
+
         def _fn_wrapper(fn: Callable) -> Callable:
             @wraps(fn)
-            async def _async_wrapper(*args: Any, **kwargs: Any) -> Any:
-                return await fn(*args, **kwargs)
+            @with_llm_cache("huggingface", unwrap_fn=maybe_unwrap_huggingface_response, wrap_fn=maybe_wrap_huggingface_response)
+            async def _async_wrapper(self, *args: Any, **kwargs: Any) -> Any:
+                return await fn(self, *args, **kwargs)
 
             return _async_wrapper
 

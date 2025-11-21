@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import importlib
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 import weave
 from weave.integrations.patcher import MultiPatcher, NoOpPatcher, SymbolPatcher
@@ -12,6 +13,99 @@ if TYPE_CHECKING:
     from litellm.utils import ModelResponse
 
 _litellm_patcher: MultiPatcher | None = None
+_cache_initialized: bool = False
+
+
+class DiskCache:
+    """
+    Drop-in replacement backend for LiteLLM cache.
+
+    This wraps diskcache.Cache and provides both sync and async APIs
+    that LiteLLM expects for its caching backend.
+    """
+
+    def __init__(self, directory, size_limit=None, underlying_cache=None):
+        """
+        Initialize disk cache.
+
+        Args:
+            directory: Path to cache directory
+            size_limit: Optional size limit in bytes. If None, uses a very large default (2^62 bytes)
+            underlying_cache: Optional existing diskcache.Cache instance to reuse
+        """
+        if underlying_cache is not None:
+            # Reuse existing cache instance (shares storage with Weave cache)
+            self._dc = underlying_cache
+        else:
+            # Create new cache instance
+            import diskcache as dc
+            cap = size_limit if size_limit is not None else (1 << 62)
+            self._dc = dc.Cache(directory, size_limit=cap)
+
+    # Sync API used by LiteLLM
+    def get_cache(self, key, **kwargs):
+        """Get value from cache by key."""
+        result = self._dc.get(key)
+        if result is not None:
+            # Set context variable to indicate cache hit
+            from weave.integrations.cache import _cache_hit
+            _cache_hit.set(True)
+        return result
+
+    def set_cache(self, key, value, ttl=None, **kwargs):
+        """Set value in cache with optional TTL."""
+        expire = None if ttl is None else float(ttl)
+        self._dc.set(key, value, expire=expire)
+
+    # Async API used by LiteLLM
+    async def async_get_cache(self, key, **kwargs):
+        """Async get value from cache by key."""
+        result = self.get_cache(key, **kwargs)
+        # get_cache already sets _cache_hit if result is not None
+        return result
+
+    async def async_set_cache(self, key, value, ttl=None, **kwargs):
+        """Async set value in cache with optional TTL."""
+        return self.set_cache(key, value, ttl=ttl, **kwargs)
+
+    async def async_set_cache_pipeline(self, cache_list, ttl=None, **kwargs):
+        """
+        Async batch set multiple cache entries.
+
+        Args:
+            cache_list: List of (key, value) tuples
+            ttl: Optional time-to-live in seconds
+        """
+        for k, v in cache_list:
+            self.set_cache(k, v, ttl=ttl)
+
+    async def batch_cache_write(self, key, value, ttl=None, **kwargs):
+        """Async batch write (single entry)."""
+        self.set_cache(key, value, ttl=ttl)
+
+    async def ping(self):
+        """Async ping check."""
+        return True
+
+    async def delete_cache_keys(self, keys):
+        """
+        Async delete multiple cache keys.
+
+        Args:
+            keys: List of keys to delete
+        """
+        for k in keys:
+            try:
+                del self._dc[k]
+            except KeyError:
+                pass
+        return True
+
+    async def disconnect(self):
+        """Async disconnect and close cache."""
+        self._dc.close()
+
+
 
 
 # This accumulator is nearly identical to the mistral accumulator, just with different types.
@@ -89,8 +183,14 @@ def should_use_accumulator(inputs: dict) -> bool:
 
 def make_wrapper(settings: OpSettings) -> Callable:
     def litellm_wrapper(fn: Callable) -> Callable:
+        from functools import wraps
+
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            return fn(*args, **kwargs)
+
         op_kwargs = settings.model_dump()
-        op = weave.op(fn, **op_kwargs)
+        op = weave.op(wrapper, **op_kwargs)
         return _add_accumulator(
             op,  # type: ignore
             make_accumulator=lambda inputs: litellm_accumulator,

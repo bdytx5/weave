@@ -104,6 +104,28 @@ def init(
 
     parse_and_apply_settings(settings)
 
+    # Initialize cache if enabled
+    from . import settings as settings_module
+
+    if settings_module.cache_enabled():
+        from ..integrations.cache import LLMCache, set_global_cache, _cache_disabled
+
+        try:
+            cache = LLMCache(
+                directory=settings_module.cache_dir(),
+                size_limit=settings_module.cache_size_limit(),
+                ttl=settings_module.cache_ttl(),
+                deterministic_only=settings_module.cache_deterministic_only(),
+            )
+            set_global_cache(cache)
+            _cache_disabled.set(False)  # Ensure cache is not disabled
+            logger.info(f"Cache enabled at {settings_module.cache_dir()}")
+        except ImportError:
+            logger.warning(
+                "Cache enabled but diskcache not installed. "
+                "Install with: pip install diskcache"
+            )
+
     global _global_postprocess_inputs
     global _global_postprocess_output
     global _global_attributes

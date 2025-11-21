@@ -283,6 +283,7 @@ INTEGRATION_MODULE_MAPPING: dict[str, Callable[[], None]] = {
     "litellm": patch_litellm,
     "cerebras": patch_cerebras,
     "cohere": patch_cohere,
+    "google.genai": patch_google_genai,
     "google.generativeai": patch_google_genai,
     "vertexai": patch_vertexai,
     "huggingface_hub": patch_huggingface,

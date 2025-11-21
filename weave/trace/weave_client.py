@@ -159,7 +159,11 @@ logger = logging.getLogger(__name__)
 
 def print_call_link(call: Call) -> None:
     if settings.should_print_call_link():
-        logger.info(f"{TRACE_CALL_EMOJI} {call.ui_url}")
+        # Check if this was a cache hit (stored in summary by finish_call)
+        cache_emoji = ""
+        if call.summary and call.summary.get("weave.cache_hit"):
+            cache_emoji = "💾 "
+        logger.info(f"{cache_emoji}{TRACE_CALL_EMOJI} {call.ui_url}")
 
 
 def _add_scored_by_to_calls_query(
@@ -849,6 +853,16 @@ class WeaveClient:
             return None
 
         from weave.trace.api import _global_postprocess_output
+
+        # Capture cache hit status from context variable
+        try:
+            from weave.integrations.cache import _cache_hit
+            if _cache_hit.get():
+                if call.summary is None:
+                    call.summary = {}
+                call.summary["weave.cache_hit"] = True
+        except Exception:
+            pass
 
         ended_at = datetime.datetime.now(tz=datetime.timezone.utc)
         call.ended_at = ended_at

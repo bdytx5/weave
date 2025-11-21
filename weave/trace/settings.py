@@ -187,6 +187,50 @@ class UserSettings(BaseModel):
     Can be overridden with the environment variable `WEAVE_USE_PARALLEL_TABLE_UPLOAD`
     """
 
+    cache_enabled: bool = False
+    """
+    Toggles response caching for LLM integrations.
+
+    If True, caches LLM responses to disk to avoid duplicate API calls.
+    Works with OpenAI, Anthropic, and other supported integrations.
+    Can be overridden with the environment variable `WEAVE_CACHE_ENABLED`
+    """
+
+    cache_dir: str = str(Path.home() / ".weave" / "cache")
+    """
+    Directory for cached responses.
+
+    Path where LLM responses are cached. Defaults to ~/.weave/cache
+    Can be overridden with the environment variable `WEAVE_CACHE_DIR`
+    """
+
+    cache_size_limit: Optional[int] = None
+    """
+    Maximum cache size in bytes.
+
+    If None, cache size is unlimited. If set, older entries are evicted
+    when the limit is reached.
+    Can be overridden with the environment variable `WEAVE_CACHE_SIZE_LIMIT`
+    """
+
+    cache_ttl: Optional[float] = None
+    """
+    Cache entry time-to-live in seconds.
+
+    If None, cache entries never expire. If set, entries are automatically
+    removed after this many seconds.
+    Can be overridden with the environment variable `WEAVE_CACHE_TTL`
+    """
+
+    cache_deterministic_only: bool = False
+    """
+    Only cache deterministic requests (temperature=0).
+
+    If True, only caches requests with temperature=0 (deterministic).
+    If False (default), caches ALL requests regardless of temperature.
+    Can be overridden with the environment variable `WEAVE_CACHE_DETERMINISTIC_ONLY`
+    """
+
     model_config = ConfigDict(extra="forbid")
     _is_first_apply: bool = PrivateAttr(True)
 
@@ -302,6 +346,31 @@ def should_use_parallel_table_upload() -> bool:
 def should_implicitly_patch_integrations() -> bool:
     """Returns whether implicit patching of integrations is enabled."""
     return _should("implicitly_patch_integrations")
+
+
+def cache_enabled() -> bool:
+    """Returns whether LLM response caching is enabled."""
+    return _should("cache_enabled")
+
+
+def cache_dir() -> str:
+    """Returns the cache directory path."""
+    return _optional_str("cache_dir") or str(Path.home() / ".weave" / "cache")
+
+
+def cache_size_limit() -> Optional[int]:
+    """Returns the cache size limit in bytes."""
+    return _optional_int("cache_size_limit")
+
+
+def cache_ttl() -> Optional[float]:
+    """Returns the cache TTL in seconds."""
+    return _optional_float("cache_ttl")
+
+
+def cache_deterministic_only() -> bool:
+    """Returns whether to only cache deterministic requests."""
+    return _should("cache_deterministic_only")
 
 
 def parse_and_apply_settings(

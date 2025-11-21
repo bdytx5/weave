@@ -11,10 +11,42 @@ from weave.trace.autopatch import IntegrationSettings, OpSettings
 _cerebras_patcher: MultiPatcher | None = None
 
 
+def maybe_unwrap_cerebras_response(value: Any) -> Any:
+    """Unwrap Cerebras response for caching."""
+    # Cerebras responses are pydantic models, return as-is for serialization
+    return value
+
+
+def maybe_wrap_cerebras_response(value: Any) -> Any:
+    """Reconstruct Cerebras response objects from cached dicts."""
+    if not isinstance(value, dict):
+        return value
+
+    try:
+        from cerebras.cloud.sdk.types.chat.chat_completion import ChatCompletionResponse
+
+        # Try to reconstruct ChatCompletionResponse from dict
+        if "choices" in value and "model" in value:
+            try:
+                return ChatCompletionResponse(**value)
+            except Exception:
+                pass
+    except:
+        pass
+
+    return value
+
+
 def create_wrapper_sync(settings: OpSettings) -> Callable[[Callable], Callable]:
     def wrapper(fn: Callable) -> Callable:
+        from weave.integrations.cache import with_llm_cache
+
+        @with_llm_cache("cerebras", unwrap_fn=maybe_unwrap_cerebras_response, wrap_fn=maybe_wrap_cerebras_response)
+        def _cached_fn(self, *args, **kwargs):
+            return fn(self, *args, **kwargs)
+
         op_kwargs = settings.model_dump()
-        op = weave.op(fn, **op_kwargs)
+        op = weave.op(_cached_fn, **op_kwargs)
         return op
 
     return wrapper
@@ -22,10 +54,13 @@ def create_wrapper_sync(settings: OpSettings) -> Callable[[Callable], Callable]:
 
 def create_wrapper_async(settings: OpSettings) -> Callable[[Callable], Callable]:
     def wrapper(fn: Callable) -> Callable:
+        from weave.integrations.cache import with_llm_cache
+
         def _fn_wrapper(fn: Callable) -> Callable:
             @wraps(fn)
-            async def _async_wrapper(*args: Any, **kwargs: Any) -> Any:
-                return await fn(*args, **kwargs)
+            @with_llm_cache("cerebras", unwrap_fn=maybe_unwrap_cerebras_response, wrap_fn=maybe_wrap_cerebras_response)
+            async def _async_wrapper(self, *args: Any, **kwargs: Any) -> Any:
+                return await fn(self, *args, **kwargs)
 
             return _async_wrapper
 

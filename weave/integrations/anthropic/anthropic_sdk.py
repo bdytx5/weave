@@ -17,6 +17,33 @@ if TYPE_CHECKING:
 _anthropic_patcher: MultiPatcher | None = None
 
 
+def maybe_unwrap_anthropic_response(value: Any) -> Any:
+    """Unwrap Anthropic response for caching."""
+    # Anthropic responses are already clean pydantic models
+    # Just return as-is for serialization
+    return value
+
+
+def maybe_wrap_anthropic_response(value: Any) -> Any:
+    """Reconstruct Anthropic response objects from cached dicts."""
+    if not isinstance(value, dict):
+        return value
+
+    try:
+        from anthropic.types import Message
+
+        # Try to reconstruct Message from dict
+        if "content" in value and "role" in value:
+            try:
+                return Message(**value)
+            except Exception:
+                pass
+    except:
+        pass
+
+    return value
+
+
 def anthropic_accumulator(
     acc: Message | None,
     value: MessageStreamEvent,
@@ -81,8 +108,14 @@ def should_use_accumulator(inputs: dict) -> bool:
 def create_wrapper_sync(settings: OpSettings) -> Callable[[Callable], Callable]:
     def wrapper(fn: Callable) -> Callable:
         """We need to do this so we can check if `stream` is used."""
+        from weave.integrations.cache import with_llm_cache
+
+        @with_llm_cache("anthropic", unwrap_fn=maybe_unwrap_anthropic_response, wrap_fn=maybe_wrap_anthropic_response)
+        def _cached_fn(self, *args, **kwargs):
+            return fn(self, *args, **kwargs)
+
         op_kwargs = settings.model_dump()
-        op = weave.op(fn, **op_kwargs)
+        op = weave.op(_cached_fn, **op_kwargs)
         return _add_accumulator(
             op,  # type: ignore
             make_accumulator=lambda inputs: anthropic_accumulator,
@@ -97,10 +130,13 @@ def create_wrapper_sync(settings: OpSettings) -> Callable[[Callable], Callable]:
 # it manually here...
 def create_wrapper_async(settings: OpSettings) -> Callable[[Callable], Callable]:
     def wrapper(fn: Callable) -> Callable:
+        from weave.integrations.cache import with_llm_cache
+
         def _fn_wrapper(fn: Callable) -> Callable:
             @wraps(fn)
-            async def _async_wrapper(*args: Any, **kwargs: Any) -> Any:
-                return await fn(*args, **kwargs)
+            @with_llm_cache("anthropic", unwrap_fn=maybe_unwrap_anthropic_response, wrap_fn=maybe_wrap_anthropic_response)
+            async def _async_wrapper(self, *args: Any, **kwargs: Any) -> Any:
+                return await fn(self, *args, **kwargs)
 
             return _async_wrapper
 

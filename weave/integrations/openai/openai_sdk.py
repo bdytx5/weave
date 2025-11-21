@@ -64,6 +64,32 @@ def maybe_unwrap_api_response(value: Any) -> Any:
     return value
 
 
+def maybe_wrap_api_response(value: Any) -> Any:
+    """Reconstruct OpenAI response objects from cached dicts."""
+    if not isinstance(value, dict):
+        return value
+
+    try:
+        from openai.types.chat import ChatCompletion, ChatCompletionChunk
+
+        # Try to reconstruct ChatCompletion from dict
+        if "choices" in value and "model" in value:
+            try:
+                return ChatCompletion(**value)
+            except Exception:
+                pass
+
+        # Try to reconstruct ChatCompletionChunk from dict
+        try:
+            return ChatCompletionChunk(**value)
+        except Exception:
+            pass
+    except:
+        pass
+
+    return value
+
+
 def openai_on_finish_post_processor(value: ChatCompletionChunk | None) -> dict | None:
     from openai.types.chat import ChatCompletion, ChatCompletionChunk
     from openai.types.chat.chat_completion_chunk import (
@@ -408,7 +434,10 @@ def create_wrapper_sync(settings: OpSettings) -> Callable[[Callable], Callable]:
         """We need to do this so we can check if `stream` is used."""
 
         def _add_stream_options(fn: Callable) -> Callable:
+            from weave.integrations.cache import with_llm_cache
+
             @wraps(fn)
+            @with_llm_cache("openai", unwrap_fn=maybe_unwrap_api_response, wrap_fn=maybe_wrap_api_response)
             def _wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
                 if kwargs.get("stream") and kwargs.get("stream_options") is None:
                     completion = self
@@ -453,7 +482,10 @@ def create_wrapper_async(settings: OpSettings) -> Callable[[Callable], Callable]
         """We need to do this so we can check if `stream` is used."""
 
         def _add_stream_options(fn: Callable) -> Callable:
+            from weave.integrations.cache import with_llm_cache
+
             @wraps(fn)
+            @with_llm_cache("openai", unwrap_fn=maybe_unwrap_api_response, wrap_fn=maybe_wrap_api_response)
             async def _wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
                 if kwargs.get("stream") and kwargs.get("stream_options") is None:
                     completion = self
