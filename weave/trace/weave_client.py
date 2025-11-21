@@ -815,12 +815,13 @@ class WeaveClient:
             return True
 
         def on_complete(f: Future) -> None:
+            root_call_did_not_error = False
             try:
-                root_call_did_not_error = f.result() and not current_call
-                if root_call_did_not_error and should_print_call_link_:
-                    print_call_link(call)
+                root_call_did_not_error = f.result()
             except Exception:
                 pass
+            if root_call_did_not_error and should_print_call_link():
+                print_call_link(call)
 
         fut = self.future_executor.defer(send_start_call)
         fut.add_done_callback(on_complete)

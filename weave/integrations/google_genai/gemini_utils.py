@@ -19,15 +19,12 @@ SKIP_TRACING_FUNCTIONS = [
 def maybe_unwrap_google_genai_response(value: Any) -> Any:
     """Unwrap Google GenAI response for caching."""
     # Google GenAI responses are pydantic models, return as-is for serialization
-    print(f"[GOOGLE GENAI UNWRAP] Type: {type(value)}")
     return value
 
 
 def maybe_wrap_google_genai_response(value: Any) -> Any:
     """Reconstruct Google GenAI response objects from cached dicts."""
-    print(f"[GOOGLE GENAI WRAP] Input type: {type(value)}, is_dict: {isinstance(value, dict)}")
     if not isinstance(value, dict):
-        print(f"[GOOGLE GENAI WRAP] Not a dict, returning as-is")
         return value
 
     try:
@@ -36,17 +33,12 @@ def maybe_wrap_google_genai_response(value: Any) -> Any:
         # Try to reconstruct GenerateContentResponse from dict
         if "candidates" in value or "usage_metadata" in value:
             try:
-                result = GenerateContentResponse(**value)
-                print(f"[GOOGLE GENAI WRAP] Successfully reconstructed to {type(result)}")
-                return result
-            except Exception as e:
-                print(f"[GOOGLE GENAI WRAP] Reconstruction failed: {e}")
+                return GenerateContentResponse(**value)
+            except Exception:
                 pass
-    except Exception as e:
-        print(f"[GOOGLE GENAI WRAP] Import/check failed: {e}")
+    except:
         pass
 
-    print(f"[GOOGLE GENAI WRAP] Returning dict as-is")
     return value
 
 
